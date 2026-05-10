@@ -1,0 +1,126 @@
+name: CI/CD Frontend - Innovatech Chile
+
+on:
+  push:
+    branches:
+      - deploy
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REPOSITORY: innovatech-frontend
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+
+  # ────────────────────────────────────────
+  # JOB 1: Build y Push a ECR
+  # ────────────────────────────────────────
+  build-and-push:
+    name: Build y Push imagen a ECR
+    runs-on: ubuntu-latest
+
+    outputs:
+      image: ${{ steps.build-image.outputs.image }}
+      registry: ${{ steps.login-ecr.outputs.registry }}
+
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login a Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Construir imagen Docker (multi-stage)
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker build -t $IMAGE_URI .
+          echo "image=$IMAGE_URI" >> $GITHUB_OUTPUT
+
+      - name: Push imagen a ECR
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker tag $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+                     $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "✅ Imagen publicada: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+  # ────────────────────────────────────────
+  # JOB 2: Deploy en EC2 Frontend
+  # ────────────────────────────────────────
+  deploy:
+    name: Deploy en EC2 Frontend
+    runs-on: ubuntu-latest
+    needs: build-and-push
+
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v4
+
+      - name: Configurar credenciales AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login a ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Deploy en EC2 via SSH
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_URI: ${{ needs.build-and-push.outputs.image }}
+          SSH_PRIVATE_KEY: ${{ secrets.EC2_FRONTEND_SSH_KEY }}
+          EC2_HOST: ${{ secrets.EC2_FRONTEND_HOST }}
+          BACKEND_URL: ${{ secrets.BACKEND_URL }}
+        run: |
+          echo "$SSH_PRIVATE_KEY" > /tmp/ec2_key.pem
+          chmod 600 /tmp/ec2_key.pem
+
+          ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key.pem ec2-user@$EC2_HOST << ENDSSH
+            set -e
+
+            echo "🔐 Login a ECR..."
+            aws ecr get-login-password --region ${{ env.AWS_REGION }} | \
+              docker login --username AWS --password-stdin $ECR_REGISTRY
+
+            echo "📥 Pull de la nueva imagen..."
+            docker pull $IMAGE_URI
+
+            echo "🛑 Detener contenedor anterior..."
+            docker stop innovatech-frontend || true
+            docker rm innovatech-frontend || true
+
+            echo "🚀 Levantar nuevo contenedor..."
+            docker run -d \
+              --name innovatech-frontend \
+              --restart unless-stopped \
+              -p 80:80 \
+              -e BACKEND_URL=$BACKEND_URL \
+              $IMAGE_URI
+
+            echo "⏳ Esperando que el frontend esté listo..."
+            sleep 10
+            curl -f http://localhost:80/health && echo "✅ Deploy exitoso!" || echo "⚠️ Health check falló"
+
+            echo "🧹 Limpiar imágenes antiguas..."
+            docker image prune -f
+          ENDSSH
+
+          rm -f /tmp/ec2_key.pem

@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Innovatech Chile</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Arial, sans-serif;
+      background: #f0f2f5;
+      color: #333;
+    }
+    header {
+      background: #1a1a2e;
+      color: white;
+      padding: 20px 40px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    header h1 { font-size: 1.5rem; }
+    header span { font-size: 0.9rem; color: #aaa; }
+    .container { max-width: 800px; margin: 40px auto; padding: 0 20px; }
+    .card {
+      background: white;
+      border-radius: 8px;
+      padding: 24px;
+      margin-bottom: 24px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+    h2 { margin-bottom: 16px; color: #1a1a2e; }
+    .status {
+      display: inline-block;
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 0.85rem;
+      font-weight: bold;
+    }
+    .status.ok { background: #d4edda; color: #155724; }
+    .status.error { background: #f8d7da; color: #721c24; }
+    .status.loading { background: #fff3cd; color: #856404; }
+    form { display: flex; flex-direction: column; gap: 12px; }
+    input {
+      padding: 10px 14px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      font-size: 1rem;
+    }
+    button {
+      padding: 10px 20px;
+      background: #1a1a2e;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      font-size: 1rem;
+      cursor: pointer;
+    }
+    button:hover { background: #16213e; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px 14px; text-align: left; border-bottom: 1px solid #eee; }
+    th { background: #f8f9fa; font-weight: bold; }
+    .msg { padding: 10px; border-radius: 6px; margin-top: 10px; font-size: 0.9rem; }
+    .msg.ok { background: #d4edda; color: #155724; }
+    .msg.error { background: #f8d7da; color: #721c24; }
+    #no-usuarios { color: #888; font-style: italic; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>🚀 Innovatech Chile</h1>
+    <span>Sistema de gestión de usuarios — EP2 ISY1101</span>
+  </div>
+</header>
+
+<div class="container">
+
+  <!-- Estado del backend -->
+  <div class="card">
+    <h2>Estado del sistema</h2>
+    <p>Backend: <span id="backend-status" class="status loading">Verificando...</span></p>
+    <p style="margin-top:8px; font-size:0.85rem; color:#888;">
+      Conectado a: <code id="backend-url"></code>
+    </p>
+  </div>
+
+  <!-- Formulario crear usuario -->
+  <div class="card">
+    <h2>Crear usuario</h2>
+    <form id="form-usuario">
+      <input type="text" id="nombre" placeholder="Nombre completo" required />
+      <input type="email" id="email" placeholder="Correo electrónico" required />
+      <button type="submit">Crear usuario</button>
+    </form>
+    <div id="form-msg" class="msg" style="display:none;"></div>
+  </div>
+
+  <!-- Lista de usuarios -->
+  <div class="card">
+    <h2>Usuarios registrados</h2>
+    <div id="tabla-container">
+      <p id="no-usuarios">Cargando...</p>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // La URL del backend se inyecta via variable de entorno en el HTML por Nginx
+  const BACKEND_URL = window.BACKEND_URL || 'http://localhost:3000';
+  document.getElementById('backend-url').textContent = BACKEND_URL;
+
+  // Verificar estado del backend
+  async function checkHealth() {
+    try {
+      const res = await fetch(`${BACKEND_URL}/health`);
+      const data = await res.json();
+      const el = document.getElementById('backend-status');
+      if (data.status === 'ok') {
+        el.textContent = '✅ Conectado';
+        el.className = 'status ok';
+      } else {
+        el.textContent = '❌ Error';
+        el.className = 'status error';
+      }
+    } catch (e) {
+      const el = document.getElementById('backend-status');
+      el.textContent = '❌ Sin conexión';
+      el.className = 'status error';
+    }
+  }
+
+  // Cargar usuarios
+  async function cargarUsuarios() {
+    try {
+      const res = await fetch(`${BACKEND_URL}/usuarios`);
+      const data = await res.json();
+      const container = document.getElementById('tabla-container');
+
+      if (data.usuarios.length === 0) {
+        container.innerHTML = '<p id="no-usuarios">No hay usuarios registrados aún.</p>';
+        return;
+      }
+
+      let html = '<table><thead><tr><th>#</th><th>Nombre</th><th>Email</th><th>Fecha</th></tr></thead><tbody>';
+      data.usuarios.forEach(u => {
+        const fecha = new Date(u.creado_en).toLocaleDateString('es-CL');
+        html += `<tr><td>${u.id}</td><td>${u.nombre}</td><td>${u.email}</td><td>${fecha}</td></tr>`;
+      });
+      html += '</tbody></table>';
+      container.innerHTML = html;
+    } catch (e) {
+      document.getElementById('tabla-container').innerHTML = '<p style="color:red">Error al cargar usuarios.</p>';
+    }
+  }
+
+  // Crear usuario
+  document.getElementById('form-usuario').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const nombre = document.getElementById('nombre').value;
+    const email = document.getElementById('email').value;
+    const msg = document.getElementById('form-msg');
+
+    try {
+      const res = await fetch(`${BACKEND_URL}/usuarios`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nombre, email })
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        msg.textContent = '✅ Usuario creado correctamente';
+        msg.className = 'msg ok';
+        msg.style.display = 'block';
+        document.getElementById('nombre').value = '';
+        document.getElementById('email').value = '';
+        cargarUsuarios();
+      } else {
+        msg.textContent = '❌ Error: ' + data.error;
+        msg.className = 'msg error';
+        msg.style.display = 'block';
+      }
+    } catch (e) {
+      msg.textContent = '❌ No se pudo conectar al backend';
+      msg.className = 'msg error';
+      msg.style.display = 'block';
+    }
+
+    setTimeout(() => { msg.style.display = 'none'; }, 4000);
+  });
+
+  // Inicializar
+  checkHealth();
+  cargarUsuarios();
+  setInterval(cargarUsuarios, 10000);
+</script>
+
+</body>
+</html>

@@ -1,0 +1,19 @@
+version: "3.9"
+
+services:
+
+  # ─────────────────────────────────────────
+  # Frontend Nginx
+  # ─────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: innovatech-frontend
+    restart: unless-stopped
+    environment:
+      # URL del backend — apunta a la IP privada de EC2-Backend
+      BACKEND_URL: ${BACKEND_URL:-http://localhost:3000}
+    ports:
+      - "80:80"
+
